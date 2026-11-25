@@ -22,3 +22,27 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# --- PawFect: build output ---
+target/
+backend/target/
+
+# --- PawFect: local data (never commit user data) ---
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+backend/backups/
+backend/photos/
+backend/uploads/
+*.bak
+
+# --- Local config / editor / OS noise ---
+.env
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
