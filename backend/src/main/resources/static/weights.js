@@ -51,7 +51,7 @@
     const lastLabel = `<text class="w-last" x="${lp[0].toFixed(1)}" y="${(below ? lp[1] + 22 : lp[1] - 13).toFixed(1)}" text-anchor="${lp[0] > W - 90 ? 'end' : 'middle'}">${esc(fmt(l[l.length - 1].grams))}</text>`;
     const summary = `Weight trend for ${name}: ${fmt(l[0].grams)} on ${date(l[0].date)} to ${fmt(l[l.length - 1].grams)} on ${date(l[l.length - 1].date)}, ${l.length} measurements`;
     return `<svg class="w-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(summary)}"><title>${esc(summary)}</title>
-      <defs><linearGradient id="w-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#456c53" stop-opacity=".28"/><stop offset="1" stop-color="#456c53" stop-opacity="0"/></linearGradient></defs>
+      <defs><linearGradient id="w-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--fg-456c53)" stop-opacity=".28"/><stop offset="1" style="stop-color:var(--fg-456c53)" stop-opacity="0"/></linearGradient></defs>
       <g class="w-grid">${grid}</g><path d="${area}" fill="url(#w-grad)"/><path class="w-line" d="${line}"/>${dots}${lastLabel}<g class="w-axis">${labels}</g></svg>`;
   }
 

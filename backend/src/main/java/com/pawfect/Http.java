@@ -75,4 +75,16 @@ final class Http {
             sendJson(x, 500, Map.of("error", "The Pawfect database could not complete that request."));
         }
     }
+
+    /** baseRevision from the query string, for requests without a JSON body (DELETE, raw uploads). */
+    static long queryRevision(HttpExchange x) {
+        String q = x.getRequestURI().getRawQuery();
+        if (q != null) {
+            for (String part : q.split("&")) {
+                String[] kv = part.split("=", 2);
+                if (kv.length == 2 && kv[0].equals("baseRevision") && kv[1].matches("\\d{1,15}")) return Long.parseLong(kv[1]);
+            }
+        }
+        throw new ValidationException("REVISION_REQUIRED", "baseRevision is required. Reload Pawfect to get the latest data and try again.");
+    }
 }

@@ -24,11 +24,16 @@ public final class PawfectServer {
 
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         RequestGuard guard = new RequestGuard(server.getAddress().getPort());
-        HttpContext state = server.createContext("/api/state", new StateHandler(new StateRepository(db)));
+        PhotoStore photoStore = new PhotoStore(db.directory().resolve("photos"));
+        HttpContext state = server.createContext("/api/state", new StateHandler(new StateRepository(db, photoStore)));
+        HttpContext petPhotos = server.createContext("/api/pets/", new PhotoHandler(new PhotoRepository(db, photoStore)));
+        HttpContext photoFiles = server.createContext("/photos/", new PhotoFileHandler(photoStore));
         HttpContext weights = server.createContext("/api/weights", new WeightHandler(new WeightRepository(db)));
         HttpContext statics = server.createContext("/", new StaticHandler());
         state.getFilters().add(guard);
         weights.getFilters().add(guard);
+        petPhotos.getFilters().add(guard);
+        photoFiles.getFilters().add(guard);
         statics.getFilters().add(guard);
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();

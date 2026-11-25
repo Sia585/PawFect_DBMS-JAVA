@@ -58,18 +58,32 @@
     return p;
   }
 
-  async function send(method, url, buildBody, onSuccess) {
+  /* Photos use their own endpoints (raw JPEG body) and share the same queue, revision and conflict handling.
+     method PUT uploads blob, DELETE removes. Resolves to { status: 'ok' | 'conflict' | 'failed', photo: file name or null }. */
+  function photoRequest(method, petId, blob) {
+    const p = queue.then(async () => {
+      let photo = null;
+      const status = await send(method, '/api/pets/' + encodeURIComponent(petId) + '/photo?baseRevision=' + revision, null, j => { photo = j.photo || null; }, method === 'PUT' ? blob : null);
+      return { status, photo };
+    }).catch(() => ({ status: 'failed', photo: null }));
+    queue = p;
+    return p;
+  }
+
+  async function send(method, url, buildBody, onSuccess, blob) {
     if (blocked) return 'conflict';                       // conflict pending: keep local data, send nothing
     if (revision === null) { lastError = 'Pawfect has not loaded your data yet, so nothing was saved. Reload the page.'; host.toast(lastError); return 'failed'; }
     // DELETE builds its revision into the URL when queued, so refresh it here in case earlier queue items moved it.
-    if (method === 'DELETE') url = url.replace(/baseRevision=\d+/, 'baseRevision=' + revision);
+    url = url.replace(/baseRevision=\d+/, 'baseRevision=' + revision);
     let r;
     try {
-      r = await fetch(url, buildBody
-        ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody()) }
-        : { method });
+      r = await fetch(url, blob
+        ? { method, headers: { 'Content-Type': blob.type || 'image/jpeg' }, body: blob }
+        : buildBody
+          ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody()) }
+          : { method });
     } catch (e) { lastError = 'Could not save to SQLite. Check that Pawfect is running.'; host.toast(lastError); return 'failed'; }
-    if (r.ok) { revision = (await r.json()).revision; if (onSuccess) onSuccess(); return 'ok'; }
+    if (r.ok) { const j = await r.json(); revision = j.revision; if (onSuccess) onSuccess(j); return 'ok'; }
     if (r.status === 409) {
       let code = ''; try { code = (await r.clone().json()).code; } catch (e) { /* ignore */ }
       if (code === 'STALE_REVISION') { blocked = true; showConflict(); return 'conflict'; }
@@ -120,5 +134,5 @@
     if (!d.open) d.showModal();
   }
 
-  window.PawfectSync = { init, load, save, weightRequest, lastError: () => lastError };
+  window.PawfectSync = { init, load, save, weightRequest, photoRequest, lastError: () => lastError };
 })();

@@ -67,7 +67,10 @@ final class TestSupport {
                     if (!tables.next()) continue;
                 }
                 List<List<String>> rows = new ArrayList<>();
-                try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT rowid, * FROM " + t + " ORDER BY rowid")) {
+                String sql = t.equals("pet")      // photo_file is covered by the photo tests; keeping it out lets older dumps compare equal
+                    ? "SELECT rowid,id,owner_id,name,species,breed,sex,birthdate,weight,vet,face,notes FROM pet ORDER BY rowid"
+                    : "SELECT rowid, * FROM " + t + " ORDER BY rowid";
+                try (Statement s = c.createStatement(); ResultSet r = s.executeQuery(sql)) {
                     int n = r.getMetaData().getColumnCount();
                     while (r.next()) { List<String> row = new ArrayList<>(); for (int i = 1; i <= n; i++) row.add(r.getString(i)); rows.add(row); }
                 }
@@ -143,6 +146,41 @@ final class TestSupport {
         b.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
         HttpResponse<String> r = CLIENT.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return new Response(r.statusCode(), r.body(), r.headers());
+    }
+
+    record Binary(int status, byte[] body, java.net.http.HttpHeaders headers) {}
+
+    /** Sends raw bytes (an image upload) or, with a null body, a bodiless request; returns the raw response bytes. */
+    static Binary sendBytes(int port, String method, String path, byte[] body, String contentType, String... extraHeaders) throws Exception {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(15));
+        if (contentType != null) b.header("Content-Type", contentType);
+        for (int i = 0; i + 1 < extraHeaders.length; i += 2) b.header(extraHeaders[i], extraHeaders[i + 1]);
+        b.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+        HttpResponse<byte[]> r = CLIENT.send(b.build(), HttpResponse.BodyHandlers.ofByteArray());
+        return new Binary(r.statusCode(), r.body(), r.headers());
+    }
+
+    /** A real encoded picture: format is "png" or "jpg"; the content is a gradient so it compresses like a photo. */
+    static byte[] image(int w, int h, String format, boolean alpha) throws Exception {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, alpha && format.equals("png") ? java.awt.image.BufferedImage.TYPE_INT_ARGB : java.awt.image.BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            int a = alpha && x < w / 2 ? 0 : 255;
+            img.setRGB(x, y, (a << 24) | ((x * 255 / w) << 16) | ((y * 255 / h) << 8) | 0x40);
+        }
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, format, out);
+        return out.toByteArray();
+    }
+
+    static java.awt.image.BufferedImage decode(byte[] bytes) throws Exception {
+        return javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(bytes));
+    }
+
+    static String photoOf(Database d, String petId) throws SQLException {
+        try (Connection c = d.connect(); PreparedStatement q = c.prepareStatement("SELECT photo_file FROM pet WHERE id = ?")) {
+            q.setString(1, petId);
+            try (ResultSet r = q.executeQuery()) { r.next(); return r.getString(1); }
+        }
     }
 
     static Response get(int port, String path) throws Exception {

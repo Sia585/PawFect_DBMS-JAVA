@@ -4,8 +4,6 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
@@ -39,7 +37,7 @@ final class WeightHandler implements HttpHandler {
                 String id = WeightValidator.pathId(tail);
                 done(x, repository.save(WeightValidator.parseOne(id, Http.readJsonObject(x, MAX_BODY_BYTES))));
             } else if (method.equals("DELETE")) {
-                done(x, repository.delete(queryRevision(x), WeightValidator.pathId(tail)));
+                done(x, repository.delete(Http.queryRevision(x), WeightValidator.pathId(tail)));
             } else {
                 notAllowed(x, "PUT, DELETE");
             }
@@ -55,19 +53,5 @@ final class WeightHandler implements HttpHandler {
     private static void notAllowed(HttpExchange x, String allow) throws IOException {
         x.getResponseHeaders().set("Allow", allow);
         Http.sendJson(x, 405, Map.of("error", "Method not allowed"));
-    }
-
-    private static long queryRevision(HttpExchange x) {
-        String q = x.getRequestURI().getRawQuery();
-        if (q != null) {
-            for (String part : q.split("&")) {
-                String[] kv = part.split("=", 2);
-                if (kv.length == 2 && kv[0].equals("baseRevision")) {
-                    String v = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
-                    if (v.matches("\\d{1,15}")) return Long.parseLong(v);
-                }
-            }
-        }
-        throw new ValidationException("REVISION_REQUIRED", "baseRevision is required. Reload Pawfect to get the latest data and try again.");
     }
 }

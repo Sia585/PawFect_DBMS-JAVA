@@ -32,9 +32,15 @@ final class StateRepository {
         """;
 
     private final Database db;
+    private final PhotoStore photos;
 
     StateRepository(Database db) {
+        this(db, new PhotoStore(db.directory().resolve("photos")));
+    }
+
+    StateRepository(Database db, PhotoStore photos) {
         this.db = db;
+        this.photos = photos;
     }
 
     /** Reads revision, pets and records from one consistent snapshot. */
@@ -46,10 +52,11 @@ final class StateRepository {
             try {
                 revision = revision(c);
                 try (Statement s = c.createStatement();
-                     ResultSet r = s.executeQuery("SELECT id,name,species,breed,sex,birthdate,weight,vet,face,notes FROM pet ORDER BY rowid")) {
+                     ResultSet r = s.executeQuery("SELECT id,name,species,breed,sex,birthdate,weight,vet,face,notes,photo_file FROM pet ORDER BY rowid")) {
                     while (r.next()) {
                         Map<String, Object> p = new LinkedHashMap<>();
                         for (String col : List.of("id","name","species","breed","sex","birthdate","weight","vet","face","notes")) p.put(col, r.getString(col));
+                        p.put("photo", r.getString("photo_file"));
                         pets.add(p);
                     }
                 }
@@ -112,6 +119,7 @@ final class StateRepository {
                 Set<String> keepRecords = new HashSet<>(), keepPets = new HashSet<>();
                 in.records().forEach(r -> keepRecords.add(r.id()));
                 in.pets().forEach(p -> keepPets.add(p.id()));
+                List<String> photoFiles = photoFilesOfRemovedPets(c, existingPets, keepPets);
                 deleted += removeWeightsOfRemovedPets(c, existingPets, keepPets, in.removeWeights());
                 deleted += deleteMissing(c, "care_record", existingRecords, keepRecords);
                 deleted += deleteMissing(c, "pet", existingPets, keepPets);
@@ -122,12 +130,25 @@ final class StateRepository {
                     revision = revision(c);
                 }
                 tx.execute("COMMIT");
+                photoFiles.forEach(photos::delete);               // only after the pets are really gone
                 return new SaveResult(revision, inserted, updated, deleted);
             } catch (Throwable t) {
                 try { tx.execute("ROLLBACK"); } catch (SQLException ignored) { }
                 throw t;
             }
         }
+    }
+
+    private static List<String> photoFilesOfRemovedPets(Connection c, Set<String> existing, Set<String> keep) throws SQLException {
+        List<String> files = new ArrayList<>();
+        try (PreparedStatement q = c.prepareStatement("SELECT photo_file FROM pet WHERE id = ?")) {
+            for (String id : existing) {
+                if (keep.contains(id)) continue;
+                q.setString(1, id);
+                try (ResultSet r = q.executeQuery()) { if (r.next() && r.getString(1) != null) files.add(r.getString(1)); }
+            }
+        }
+        return files;
     }
 
     /**

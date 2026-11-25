@@ -14,8 +14,6 @@ final class WeightRepository {
     /** changed=false means the request matched what was already stored, so the revision did not move. */
     record Result(long revision, boolean changed) {}
 
-    private interface Work { boolean run(Connection c) throws SQLException; }
-
     private final Database db;
 
     WeightRepository(Database db) {
@@ -101,24 +99,8 @@ final class WeightRepository {
         }
     }
 
-    private Result inTransaction(long baseRevision, Work work) throws SQLException {
-        try (Connection c = db.connect(); Statement tx = c.createStatement()) {
-            tx.execute("BEGIN IMMEDIATE");
-            try {
-                long current = StateRepository.revision(c);
-                if (current != baseRevision) throw new ConflictException(current);
-                boolean changed = work.run(c);
-                long revision = current;
-                if (changed) {
-                    tx.executeUpdate("UPDATE app_state SET revision = revision + 1 WHERE id = 1");
-                    revision = StateRepository.revision(c);
-                }
-                tx.execute("COMMIT");
-                return new Result(revision, changed);
-            } catch (Throwable t) {
-                try { tx.execute("ROLLBACK"); } catch (SQLException ignored) { }
-                throw t;
-            }
-        }
+    private Result inTransaction(long baseRevision, Revisioned.Work work) throws SQLException {
+        Revisioned.Result r = Revisioned.run(db, baseRevision, work);
+        return new Result(r.revision(), r.changed());
     }
 }

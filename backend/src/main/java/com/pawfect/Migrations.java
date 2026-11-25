@@ -10,7 +10,7 @@ final class Migrations {
     private Migrations() {}
 
     static List<Migration> all() {
-        return List.of(new AppStateMigration(), new WeightMigration());
+        return List.of(new AppStateMigration(), new WeightMigration(), new PhotoMigration());
     }
 
     /** v1: a single-row table holding the revision counter used to detect stale saves. */
@@ -53,6 +53,23 @@ final class Migrations {
                     )""");
                 s.execute("CREATE INDEX idx_weight_pet_date ON weight_measurement(pet_id, measured_on)");
                 s.execute("CREATE UNIQUE INDEX idx_weight_source ON weight_measurement(source_record_id) WHERE source_record_id IS NOT NULL");
+            }
+        }
+    }
+
+    /**
+     * v3: pet photographs. The column holds only a generated file name (never a path); the JPEG itself lives in
+     * the photos folder next to the database. Ordinary pet saves never write this column.
+     */
+    static final class PhotoMigration implements Migration {
+        @Override public int version() { return 3; }
+
+        @Override public String description() { return "pet.photo_file column"; }
+
+        @Override
+        public void apply(Connection c) throws SQLException {
+            try (Statement s = c.createStatement()) {
+                s.execute("ALTER TABLE pet ADD COLUMN photo_file TEXT");
             }
         }
     }

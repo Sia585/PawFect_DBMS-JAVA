@@ -364,7 +364,7 @@ class ApiIntegrationTest {
         assertEquals(0, state.get("revision"));
         assertEquals(4, ((List<?>) state.get("pets")).size());
         assertEquals(15, ((List<?>) state.get("records")).size());
-        assertEquals(2, userVersion(db));
+        assertEquals(3, userVersion(db));
         try (var files = Files.list(tmp.resolve("backups"))) { assertEquals(1L, files.count()); }
         assertTrue(tableExists(db, "weight_measurement"));
         assertFalse(tableExists(db, "photo"));

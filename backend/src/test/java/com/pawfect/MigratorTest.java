@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
@@ -53,9 +54,9 @@ class MigratorTest {
         assertEquals(0, userVersion(d));
         Migrator.Result r = migrator(d, new BackupService()).migrate();
         assertEquals(0, r.fromVersion());
-        assertEquals(2, r.toVersion());
+        assertEquals(3, r.toVersion());
         assertNull(r.backup());
-        assertEquals(2, userVersion(d));
+        assertEquals(3, userVersion(d));
         assertEquals(List.of(List.of("1", "1", "0")), dump(d).get("app_state"));
         assertEquals(1L, count(d, "owner"));
         assertEquals("ok", pragmaFirst(d, "integrity_check"));
@@ -68,7 +69,7 @@ class MigratorTest {
         Database d = migrated(tmp);
         assertTrue(tableExists(d, "owner") && tableExists(d, "pet") && tableExists(d, "care_record") && tableExists(d, "app_state"));
         assertTrue(tableExists(d, "weight_measurement"));
-        assertFalse(tableExists(d, "photo"));
+        assertTrue(columnExists(d, "pet", "photo_file"));
     }
 
     @Test
@@ -104,12 +105,12 @@ class MigratorTest {
         migrator(d, new BackupService()).migrate();
         Map<String, List<List<String>>> afterFirst = dump(d);
         Migrator.Result second = migrator(d, new BackupService()).migrate();
-        assertEquals(2, second.fromVersion());
-        assertEquals(2, second.toVersion());
+        assertEquals(3, second.fromVersion());
+        assertEquals(3, second.toVersion());
         assertNull(second.backup());
         assertEquals(afterFirst, dump(d));
         assertEquals(1L, backupFiles(tmp));
-        assertEquals(2, userVersion(d));
+        assertEquals(3, userVersion(d));
     }
 
     @Test
@@ -131,7 +132,7 @@ class MigratorTest {
             assertEquals("ok", pragmaFirst(backup, "integrity_check"));
         }
         assertEquals(5L, count(d, "pet"));
-        assertEquals(2, userVersion(d));
+        assertEquals(3, userVersion(d));
         assertTrue(foreignKeyCheckClean(d));
     }
 
@@ -141,9 +142,9 @@ class MigratorTest {
         d.initialize();
         populate(d);
         Map<String, List<List<String>>> before = dump(d);
-        MigrationException e = assertThrows(MigrationException.class, () -> migrator(d, new BackupService(), new Failing(3)).migrate());
-        assertTrue(e.getMessage().contains("v3"));
-        assertEquals(2, userVersion(d));                 // v1 and v2 committed, v3 rolled back
+        MigrationException e = assertThrows(MigrationException.class, () -> migrator(d, new BackupService(), new Failing(4)).migrate());
+        assertTrue(e.getMessage().contains("v4"));
+        assertEquals(3, userVersion(d));                 // v1 to v3 committed, v4 rolled back
         assertFalse(tableExists(d, "half_done"));
         assertTrue(tableExists(d, "app_state") && tableExists(d, "weight_measurement"));
         for (String t : List.of("owner", "pet", "care_record")) assertEquals(before.get(t), dump(d).get(t));
@@ -254,13 +255,14 @@ class MigratorTest {
         exec(d, "UPDATE app_state SET revision = 7");
         Map<String, List<List<String>>> before = dump(d);
 
-        Migrator.Result r = new Migrator(d, Migrations.all(), new BackupService()).migrate();
+        Migrator.Result r = new Migrator(d, Migrations.all().subList(0, 2), new BackupService()).migrate();
         assertEquals(1, r.fromVersion());
         assertEquals(2, r.toVersion());
         assertNotNull(r.backup());
         assertEquals(before, dump(d));                                                   // owner, pets, records and revision 7 untouched
         assertEquals(2, userVersion(d));
         assertEquals(0L, count(d, "weight_measurement"));
+        assertFalse(columnExists(d, "pet", "photo_file"));
         Database backup = new Database(r.backup());
         assertEquals(1, userVersion(backup));
         assertFalse(tableExists(backup, "weight_measurement"));
@@ -288,6 +290,54 @@ class MigratorTest {
         assertEquals(3L, count(d, "weight_measurement"));
     }
 
+    private static boolean columnExists(Database d, String table, String column) throws SQLException {
+        try (Connection c = d.connect(); Statement s = c.createStatement(); ResultSet r = s.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (r.next()) if (column.equals(r.getString("name"))) return true;
+            return false;
+        }
+    }
+
+    @Test
+    void aV2DatabaseUpgradesToV3KeepingPetsAndWeights() throws Exception {
+        Database d = db(tmp);
+        d.initialize();
+        populate(d);
+        new Migrator(d, Migrations.all().subList(0, 2), new BackupService()).migrate();
+        exec(d, "INSERT INTO weight_measurement(id,pet_id,measured_on,grams) VALUES ('w1','pet-milo-001','2026-01-01',29500)");
+        Map<String, List<List<String>>> before = dump(d);
+        List<List<String>> weights = weightRows(d);
+
+        Migrator.Result r = new Migrator(d, Migrations.all(), new BackupService()).migrate();
+        assertEquals(2, r.fromVersion());
+        assertEquals(3, r.toVersion());
+        assertNotNull(r.backup());
+        assertEquals(before, dump(d));
+        assertEquals(weights, weightRows(d));
+        assertTrue(columnExists(d, "pet", "photo_file"));
+        try (Connection c = d.connect(); Statement s = c.createStatement(); ResultSet rs = s.executeQuery("SELECT COUNT(*) FROM pet WHERE photo_file IS NOT NULL")) {
+            rs.next();
+            assertEquals(0, rs.getInt(1));                                                  // existing pets simply have no photo
+        }
+        Database backup = new Database(r.backup());
+        assertEquals(2, userVersion(backup));
+        assertFalse(columnExists(backup, "pet", "photo_file"));
+        assertEquals(1L, count(backup, "weight_measurement"));
+        assertTrue(foreignKeyCheckClean(d));
+    }
+
+    @Test
+    void aMigrationBackupKeepsPhotoReferences() throws Exception {
+        Database d = migrated(tmp);
+        populate(d);
+        exec(d, "UPDATE pet SET photo_file = '0123456789abcdef0123456789abcdef.jpg' WHERE id = 'pet-milo-001'");
+        Path backupFile = new BackupService().backup(d, d.connect(), 3, 4);
+        Database backup = new Database(backupFile);
+        try (Connection c = backup.connect(); Statement s = c.createStatement(); ResultSet rs = s.executeQuery("SELECT photo_file FROM pet WHERE id = 'pet-milo-001'")) {
+            rs.next();
+            assertEquals("0123456789abcdef0123456789abcdef.jpg", rs.getString(1));
+        }
+    }
+
     /** Runs only when -Dpawfect.fixture=<path to the supplied synthetic pawfect.db> is given. The original is never touched. */
     @Test
     @EnabledIfSystemProperty(named = "pawfect.fixture", matches = ".+")
@@ -302,7 +352,7 @@ class MigratorTest {
         assertEquals(pets, count(d, "pet"));
         assertEquals(records, count(d, "care_record"));
         for (String t : List.of("owner", "pet", "care_record")) assertEquals(before.get(t), dump(d).get(t));
-        assertEquals(2, userVersion(d));
+        assertEquals(3, userVersion(d));
         assertEquals("ok", pragmaFirst(d, "integrity_check"));
         assertTrue(foreignKeyCheckClean(d));
         if (pets + records > 0) {
