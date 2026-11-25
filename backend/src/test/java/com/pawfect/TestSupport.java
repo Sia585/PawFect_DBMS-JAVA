@@ -199,6 +199,35 @@ final class TestSupport {
         return Http.JSON.writeValueAsString(m);
     }
 
+    static Map<String, Object> weight(String petId, String date, Object grams) {
+        Map<String, Object> w = new LinkedHashMap<>();
+        w.put("petId", petId); w.put("date", date); w.put("grams", grams);
+        return w;
+    }
+
+    /** JSON body for PUT /api/weights/{id} (and, with an "items" list, for the import endpoint). */
+    static String withRevision(long baseRevision, Map<String, Object> fields) throws Exception {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("baseRevision", baseRevision);
+        m.putAll(fields);
+        return Http.JSON.writeValueAsString(m);
+    }
+
+    static Map<String, Object> importItem(String id, String petId, String date, long grams, String source) {
+        Map<String, Object> m = weight(petId, date, grams);
+        m.put("id", id); m.put("sourceRecordId", source);
+        return m;
+    }
+
+    static List<List<String>> weightRows(Database d) throws SQLException {
+        List<List<String>> rows = new ArrayList<>();
+        try (Connection c = d.connect(); Statement s = c.createStatement();
+             ResultSet r = s.executeQuery("SELECT id,pet_id,measured_on,grams,note,source_record_id FROM weight_measurement ORDER BY rowid")) {
+            while (r.next()) { List<String> row = new ArrayList<>(); for (int i = 1; i <= 6; i++) row.add(r.getString(i)); rows.add(row); }
+        }
+        return rows;
+    }
+
     @SafeVarargs
     static <T> List<T> list(T... items) {
         List<T> out = new ArrayList<>();

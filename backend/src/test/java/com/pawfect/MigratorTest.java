@@ -47,15 +47,15 @@ class MigratorTest {
     }
 
     @Test
-    void freshDatabaseMigratesToV1WithoutBackup() throws Exception {
+    void freshDatabaseMigratesToLatestWithoutBackup() throws Exception {
         Database d = db(tmp);
         d.initialize();
         assertEquals(0, userVersion(d));
         Migrator.Result r = migrator(d, new BackupService()).migrate();
         assertEquals(0, r.fromVersion());
-        assertEquals(1, r.toVersion());
+        assertEquals(2, r.toVersion());
         assertNull(r.backup());
-        assertEquals(1, userVersion(d));
+        assertEquals(2, userVersion(d));
         assertEquals(List.of(List.of("1", "1", "0")), dump(d).get("app_state"));
         assertEquals(1L, count(d, "owner"));
         assertEquals("ok", pragmaFirst(d, "integrity_check"));
@@ -64,10 +64,11 @@ class MigratorTest {
     }
 
     @Test
-    void migrationAddsOnlyTheAppStateTable() throws Exception {
+    void migrationsAddOnlyTheAppStateAndWeightTables() throws Exception {
         Database d = migrated(tmp);
         assertTrue(tableExists(d, "owner") && tableExists(d, "pet") && tableExists(d, "care_record") && tableExists(d, "app_state"));
-        assertFalse(tableExists(d, "weight_measurement"));
+        assertTrue(tableExists(d, "weight_measurement"));
+        assertFalse(tableExists(d, "photo"));
     }
 
     @Test
@@ -103,12 +104,12 @@ class MigratorTest {
         migrator(d, new BackupService()).migrate();
         Map<String, List<List<String>>> afterFirst = dump(d);
         Migrator.Result second = migrator(d, new BackupService()).migrate();
-        assertEquals(1, second.fromVersion());
-        assertEquals(1, second.toVersion());
+        assertEquals(2, second.fromVersion());
+        assertEquals(2, second.toVersion());
         assertNull(second.backup());
         assertEquals(afterFirst, dump(d));
         assertEquals(1L, backupFiles(tmp));
-        assertEquals(1, userVersion(d));
+        assertEquals(2, userVersion(d));
     }
 
     @Test
@@ -130,7 +131,7 @@ class MigratorTest {
             assertEquals("ok", pragmaFirst(backup, "integrity_check"));
         }
         assertEquals(5L, count(d, "pet"));
-        assertEquals(1, userVersion(d));
+        assertEquals(2, userVersion(d));
         assertTrue(foreignKeyCheckClean(d));
     }
 
@@ -140,11 +141,11 @@ class MigratorTest {
         d.initialize();
         populate(d);
         Map<String, List<List<String>>> before = dump(d);
-        MigrationException e = assertThrows(MigrationException.class, () -> migrator(d, new BackupService(), new Failing(2)).migrate());
-        assertTrue(e.getMessage().contains("v2"));
-        assertEquals(1, userVersion(d));                 // v1 committed, v2 rolled back
+        MigrationException e = assertThrows(MigrationException.class, () -> migrator(d, new BackupService(), new Failing(3)).migrate());
+        assertTrue(e.getMessage().contains("v3"));
+        assertEquals(2, userVersion(d));                 // v1 and v2 committed, v3 rolled back
         assertFalse(tableExists(d, "half_done"));
-        assertTrue(tableExists(d, "app_state"));
+        assertTrue(tableExists(d, "app_state") && tableExists(d, "weight_measurement"));
         for (String t : List.of("owner", "pet", "care_record")) assertEquals(before.get(t), dump(d).get(t));
         assertEquals(1L, backupFiles(tmp));              // the pre-migration backup was kept
         assertEquals("ok", pragmaFirst(d, "integrity_check"));
@@ -242,6 +243,51 @@ class MigratorTest {
         assertEquals(15L, count(new Database(r.backup()), "care_record"));
     }
 
+    @Test
+    void aV1DatabaseUpgradesToV2KeepingEverythingAndBackedUp() throws Exception {
+        Database d = db(tmp);
+        d.initialize();
+        populate(d);
+        new Migrator(d, List.of(Migrations.all().get(0)), new BackupService()).migrate();      // stop at v1
+        assertEquals(1, userVersion(d));
+        assertFalse(tableExists(d, "weight_measurement"));
+        exec(d, "UPDATE app_state SET revision = 7");
+        Map<String, List<List<String>>> before = dump(d);
+
+        Migrator.Result r = new Migrator(d, Migrations.all(), new BackupService()).migrate();
+        assertEquals(1, r.fromVersion());
+        assertEquals(2, r.toVersion());
+        assertNotNull(r.backup());
+        assertEquals(before, dump(d));                                                   // owner, pets, records and revision 7 untouched
+        assertEquals(2, userVersion(d));
+        assertEquals(0L, count(d, "weight_measurement"));
+        Database backup = new Database(r.backup());
+        assertEquals(1, userVersion(backup));
+        assertFalse(tableExists(backup, "weight_measurement"));
+        assertEquals(4L, count(backup, "pet"));
+        assertTrue(foreignKeyCheckClean(d));
+        assertEquals("ok", pragmaFirst(d, "integrity_check"));
+    }
+
+    @Test
+    void weightTableEnforcesItsRules() throws Exception {
+        Database d = migrated(tmp);
+        populate(d);
+        String ok = "INSERT INTO weight_measurement(id,pet_id,measured_on,grams,source_record_id) VALUES ";
+        exec(d, ok + "('w1','pet-milo-001','2026-01-01',29500,NULL)");
+        exec(d, ok + "('w2','pet-milo-001','2026-01-02',29600,NULL)");                       // several NULL sources are fine
+        exec(d, ok + "('w3','pet-milo-001','2026-01-03',29700,'rec-1')");
+        assertThrows(SQLException.class, () -> exec(d, ok + "('x1','pet-milo-001','2026-01-01',0,NULL)"));
+        assertThrows(SQLException.class, () -> exec(d, ok + "('x2','pet-milo-001','2026-01-01',2000001,NULL)"));
+        assertThrows(SQLException.class, () -> exec(d, ok + "('x3','no-such-pet','2026-01-01',100,NULL)"));
+        assertThrows(SQLException.class, () -> exec(d, ok + "('x4','pet-milo-001','2026-01-04',100,'rec-1')"));   // source imported twice
+        assertThrows(SQLException.class, () -> exec(d, "DELETE FROM pet WHERE id = 'pet-milo-001'"));        // RESTRICT
+        assertEquals(3L, count(d, "weight_measurement"));
+        assertEquals(4L, count(d, "pet"));
+        exec(d, "DELETE FROM care_record WHERE id = 'rec-1'");                                // no FK to the source record
+        assertEquals(3L, count(d, "weight_measurement"));
+    }
+
     /** Runs only when -Dpawfect.fixture=<path to the supplied synthetic pawfect.db> is given. The original is never touched. */
     @Test
     @EnabledIfSystemProperty(named = "pawfect.fixture", matches = ".+")
@@ -256,7 +302,7 @@ class MigratorTest {
         assertEquals(pets, count(d, "pet"));
         assertEquals(records, count(d, "care_record"));
         for (String t : List.of("owner", "pet", "care_record")) assertEquals(before.get(t), dump(d).get(t));
-        assertEquals(1, userVersion(d));
+        assertEquals(2, userVersion(d));
         assertEquals("ok", pragmaFirst(d, "integrity_check"));
         assertTrue(foreignKeyCheckClean(d));
         if (pets + records > 0) {

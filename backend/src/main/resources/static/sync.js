@@ -6,15 +6,28 @@
 (() => {
   'use strict';
   const clone = x => JSON.parse(JSON.stringify(x));
-  let host = null, revision = null, queue = Promise.resolve(), blocked = false;
+  let host = null, revision = null, queue = Promise.resolve(), blocked = false, removeWeights = false, lastError = '';
 
   const init = h => { host = h; };
+
+  /* A persistent banner for pet/care-record saves that failed: the data is still on screen but NOT in SQLite. */
+  function banner(show) {
+    let b = document.getElementById('sync-banner');
+    if (!b && show) {
+      b = document.createElement('div');
+      b.id = 'sync-banner'; b.setAttribute('role', 'alert');
+      b.innerHTML = '<span>Some changes are not saved yet. Pawfect could not reach its database.</span><button type="button" class="btn light" id="sync-retry">Retry now</button>';
+      document.body.append(b);
+      b.querySelector('#sync-retry').onclick = () => save();
+    }
+    if (b) b.hidden = !show;
+  }
 
   async function fetchState() {
     const r = await fetch('/api/state', { cache: 'no-store' });
     if (!r.ok) throw new Error('load failed');
     const s = await r.json();
-    return { revision: s.revision, pets: s.pets || [], records: s.records || [] };
+    return { revision: s.revision, pets: s.pets || [], records: s.records || [], weights: s.weights || [] };
   }
 
   async function load() {
@@ -23,26 +36,48 @@
     return s;
   }
 
-  function save() {
-    queue = queue.then(sendOnce).catch(() => {});
+  /* removeWeights: set only by the confirmed "remove pet" action. It lets the server delete the removed
+     pet's weight measurements too; without it the server refuses to delete a pet that has any. */
+  function save(opts) {
+    if (opts && opts.removeWeights) removeWeights = true;
+    queue = queue.then(() => send('PUT', '/api/state', () => {
+      const d = clone(host.get());
+      const body = { baseRevision: revision, pets: d.pets, records: d.records };
+      if (removeWeights) body.removeWeightsOfDeletedPets = true;
+      return body;
+    }, () => { removeWeights = false; })).then(r => { if (r === 'ok') banner(false); else if (r === 'failed') banner(true); }).catch(() => {});
     return queue;
   }
 
-  async function sendOnce() {
-    if (blocked) return;                       // conflict pending: keep local data, send nothing
-    if (revision === null) { host.toast('Pawfect has not loaded your data yet, so nothing was saved. Reload the page.'); return; }
-    const snapshot = clone(host.get());
+  /* Weight changes use their own endpoints and share the same queue, revision and conflict handling. */
+  /* Resolves to 'ok', 'conflict' (kept on screen, see the dialog) or 'failed' (the caller undoes the change). */
+  function weightRequest(method, path, fields) {
+    const p = queue.then(() => send(method, method === 'DELETE' ? path + '?baseRevision=' + revision : path,
+      method === 'DELETE' ? null : () => Object.assign({ baseRevision: revision }, fields))).catch(() => 'failed');
+    queue = p;
+    return p;
+  }
+
+  async function send(method, url, buildBody, onSuccess) {
+    if (blocked) return 'conflict';                       // conflict pending: keep local data, send nothing
+    if (revision === null) { lastError = 'Pawfect has not loaded your data yet, so nothing was saved. Reload the page.'; host.toast(lastError); return 'failed'; }
+    // DELETE builds its revision into the URL when queued, so refresh it here in case earlier queue items moved it.
+    if (method === 'DELETE') url = url.replace(/baseRevision=\d+/, 'baseRevision=' + revision);
     let r;
     try {
-      r = await fetch('/api/state', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseRevision: revision, pets: snapshot.pets, records: snapshot.records })
-      });
-    } catch (e) { host.toast('Could not save to SQLite. Check that Pawfect is running.'); return; }
-    if (r.ok) { revision = (await r.json()).revision; return; }
-    if (r.status === 409) { blocked = true; showConflict(); return; }
+      r = await fetch(url, buildBody
+        ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody()) }
+        : { method });
+    } catch (e) { lastError = 'Could not save to SQLite. Check that Pawfect is running.'; host.toast(lastError); return 'failed'; }
+    if (r.ok) { revision = (await r.json()).revision; if (onSuccess) onSuccess(); return 'ok'; }
+    if (r.status === 409) {
+      let code = ''; try { code = (await r.clone().json()).code; } catch (e) { /* ignore */ }
+      if (code === 'STALE_REVISION') { blocked = true; showConflict(); return 'conflict'; }
+    }
     let msg = ''; try { msg = (await r.json()).error || ''; } catch (e) { /* ignore */ }
-    host.toast(msg || 'Could not save to SQLite. Check that Pawfect is running.');
+    lastError = msg || 'Could not save to SQLite. Check that Pawfect is running.';
+    host.toast(lastError);
+    return 'failed';
   }
 
   const h = (tag, attrs = {}, ...kids) => {
@@ -55,7 +90,7 @@
   function download() {
     const d = host.get();
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-    const blob = new Blob([JSON.stringify({ note: 'Unsaved Pawfect changes', exportedAt: new Date().toISOString(), pets: d.pets, records: d.records }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ note: 'Unsaved Pawfect changes', exportedAt: new Date().toISOString(), pets: d.pets, records: d.records, weights: d.weights || [] }, null, 2)], { type: 'application/json' });
     const a = h('a', { href: URL.createObjectURL(blob), download: 'pawfect-unsaved-' + stamp + '.json' });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -78,12 +113,12 @@
       if (!armed) { armed = true; reload.textContent = 'Click again to discard my unsaved changes'; return; }
       try {
         const s = await fetchState();
-        revision = s.revision; host.set({ pets: s.pets, records: s.records }); blocked = false;
+        revision = s.revision; host.set({ pets: s.pets, records: s.records, weights: s.weights }); blocked = false; removeWeights = false; banner(false);
         d.close(); host.render(); host.toast('Reloaded the latest data');
       } catch (e) { host.toast('Could not reach Pawfect. Your unsaved changes are still here.'); armed = false; reload.textContent = 'Reload latest data'; }
     };
     if (!d.open) d.showModal();
   }
 
-  window.PawfectSync = { init, load, save };
+  window.PawfectSync = { init, load, save, weightRequest, lastError: () => lastError };
 })();

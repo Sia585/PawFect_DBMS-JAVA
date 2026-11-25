@@ -53,7 +53,7 @@ class ApiIntegrationTest {
         assertEquals(200, r.status());
         assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith("application/json"));
         assertEquals("no-store", r.headers().firstValue("Cache-Control").orElse(""));
-        assertEquals(Map.of("revision", 0, "pets", List.of(), "records", List.of()), r.json());
+        assertEquals(Map.of("revision", 0, "pets", List.of(), "records", List.of(), "weights", List.of()), r.json());
     }
 
     @Test
@@ -364,9 +364,9 @@ class ApiIntegrationTest {
         assertEquals(0, state.get("revision"));
         assertEquals(4, ((List<?>) state.get("pets")).size());
         assertEquals(15, ((List<?>) state.get("records")).size());
-        assertEquals(1, userVersion(db));
+        assertEquals(2, userVersion(db));
         try (var files = Files.list(tmp.resolve("backups"))) { assertEquals(1L, files.count()); }
-        assertFalse(tableExists(db, "weight_measurement"));
+        assertTrue(tableExists(db, "weight_measurement"));
         assertFalse(tableExists(db, "photo"));
     }
 

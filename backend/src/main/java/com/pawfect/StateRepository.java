@@ -39,7 +39,7 @@ final class StateRepository {
 
     /** Reads revision, pets and records from one consistent snapshot. */
     Map<String, Object> readState() throws SQLException {
-        List<Map<String, Object>> pets = new ArrayList<>(), records = new ArrayList<>();
+        List<Map<String, Object>> pets = new ArrayList<>(), records = new ArrayList<>(), weights;
         long revision;
         try (Connection c = db.connect()) {
             c.setAutoCommit(false);
@@ -63,6 +63,7 @@ final class StateRepository {
                         item.put("notes", r.getString("notes")); records.add(item);
                     }
                 }
+                weights = WeightRepository.readAll(c);
             } finally {
                 c.rollback();
             }
@@ -71,6 +72,7 @@ final class StateRepository {
         state.put("revision", revision);
         state.put("pets", pets);
         state.put("records", records);
+        state.put("weights", weights);
         return state;
     }
 
@@ -110,6 +112,7 @@ final class StateRepository {
                 Set<String> keepRecords = new HashSet<>(), keepPets = new HashSet<>();
                 in.records().forEach(r -> keepRecords.add(r.id()));
                 in.pets().forEach(p -> keepPets.add(p.id()));
+                deleted += removeWeightsOfRemovedPets(c, existingPets, keepPets, in.removeWeights());
                 deleted += deleteMissing(c, "care_record", existingRecords, keepRecords);
                 deleted += deleteMissing(c, "pet", existingPets, keepPets);
 
@@ -125,6 +128,31 @@ final class StateRepository {
                 throw t;
             }
         }
+    }
+
+    /**
+     * Weight measurements are never touched by an ordinary save. If a pet is being removed and still has
+     * measurements, the save is refused unless the client says the user confirmed removing them too.
+     */
+    private static int removeWeightsOfRemovedPets(Connection c, Set<String> existing, Set<String> keep, boolean confirmed) throws SQLException {
+        int n = 0;
+        try (PreparedStatement q = c.prepareStatement("DELETE FROM weight_measurement WHERE pet_id = ?");
+             PreparedStatement count = c.prepareStatement("SELECT COUNT(*) FROM weight_measurement WHERE pet_id = ?")) {
+            for (String id : existing) {
+                if (keep.contains(id)) continue;
+                count.setString(1, id);
+                try (ResultSet r = count.executeQuery()) {
+                    r.next();
+                    if (r.getLong(1) == 0) continue;
+                }
+                if (!confirmed) {
+                    throw new ValidationException(409, "PET_HAS_WEIGHTS", "That pet still has weight measurements. Remove the pet from its profile page to delete them as well.");
+                }
+                q.setString(1, id);
+                n += q.executeUpdate();
+            }
+        }
+        return n;
     }
 
     private static int deleteMissing(Connection c, String table, Set<String> existing, Set<String> keep) throws SQLException {
@@ -147,7 +175,7 @@ final class StateRepository {
         return ids;
     }
 
-    private static long revision(Connection c) throws SQLException {
+    static long revision(Connection c) throws SQLException {
         try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT revision FROM app_state WHERE id = 1")) {
             return r.next() ? r.getLong(1) : 0L;
         }

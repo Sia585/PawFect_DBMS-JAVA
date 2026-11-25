@@ -25,8 +25,10 @@ public final class PawfectServer {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         RequestGuard guard = new RequestGuard(server.getAddress().getPort());
         HttpContext state = server.createContext("/api/state", new StateHandler(new StateRepository(db)));
+        HttpContext weights = server.createContext("/api/weights", new WeightHandler(new WeightRepository(db)));
         HttpContext statics = server.createContext("/", new StaticHandler());
         state.getFilters().add(guard);
+        weights.getFilters().add(guard);
         statics.getFilters().add(guard);
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();

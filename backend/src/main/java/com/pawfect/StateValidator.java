@@ -12,7 +12,8 @@ final class StateValidator {
 
     record CareRecord(String id, String petId, String type, String title, String date, String dueDate, String notes) {}
 
-    record StateInput(long baseRevision, List<Pet> pets, List<CareRecord> records) {}
+    /** removeWeights: the user explicitly confirmed removing pets, so their weight measurements may go with them. */
+    record StateInput(long baseRevision, List<Pet> pets, List<CareRecord> records, boolean removeWeights) {}
 
     static final int MAX_PETS = 1_000, MAX_RECORDS = 50_000;
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9._:-]{1,64}");
@@ -42,10 +43,12 @@ final class StateValidator {
             records.add(new CareRecord(id(r, "id"), id(r, "petId"), text(r, "type", 40), text(r, "title", 200),
                 date(r, "date"), date(r, "dueDate"), text(r, "notes", 2000)));
         }
-        return new StateInput(baseRevision, pets, records);
+        Object flag = body.get("removeWeightsOfDeletedPets");
+        if (flag != null && !(flag instanceof Boolean)) throw new ValidationException("Field 'removeWeightsOfDeletedPets' must be true or false.");
+        return new StateInput(baseRevision, pets, records, Boolean.TRUE.equals(flag));
     }
 
-    private static long baseRevision(Object v) {
+    static long baseRevision(Object v) {
         if (v == null) {
             throw new ValidationException("REVISION_REQUIRED", "baseRevision is required. Reload Pawfect to get the latest data and try again.");
         }
@@ -57,7 +60,7 @@ final class StateValidator {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> objectList(Object v, String name) {
+    static List<Map<String, Object>> objectList(Object v, String name) {
         if (!(v instanceof List<?> list)) throw new ValidationException("Expected a '" + name + "' array.");
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object item : list) {
@@ -67,23 +70,23 @@ final class StateValidator {
         return result;
     }
 
-    private static String value(Map<String, Object> m, String k) {
+    static String value(Map<String, Object> m, String k) {
         Object v = m.get(k);
         if (v instanceof Map || v instanceof List) throw new ValidationException("Field '" + k + "' must be text, a number or empty.");
         return v == null ? null : String.valueOf(v);
     }
 
-    private static void required(Map<String, Object> m, String k) {
+    static void required(Map<String, Object> m, String k) {
         if (value(m, k) == null || value(m, k).isBlank()) throw new ValidationException("Missing required field: " + k);
     }
 
-    private static String text(Map<String, Object> m, String k, int max) {
+    static String text(Map<String, Object> m, String k, int max) {
         String s = value(m, k);
         if (s != null && s.length() > max) throw new ValidationException("Field '" + k + "' is too long (max " + max + " characters).");
         return s;
     }
 
-    private static String id(Map<String, Object> m, String k) {
+    static String id(Map<String, Object> m, String k) {
         String s = value(m, k);
         if (!ID.matcher(s).matches()) {
             throw new ValidationException("Field '" + k + "' may only contain letters, digits, '.', '_', ':' and '-' (max 64 characters).");
@@ -92,7 +95,7 @@ final class StateValidator {
     }
 
     /** Blank or missing dates are allowed; anything else must be a real YYYY-MM-DD date. */
-    private static String date(Map<String, Object> m, String k) {
+    static String date(Map<String, Object> m, String k) {
         String s = value(m, k);
         if (s == null || s.isBlank()) return s;
         try {
