@@ -12,6 +12,16 @@ mvn compile exec:java
 
 Then open <http://localhost:8080>. The SQLite database file (`pawfect.db`) is created in the `backend` directory the first time the server starts. Stop the server with Ctrl+C. To use a different port, set `PAWFECT_PORT` before starting it.
 
+## Demo data (optional, one time)
+
+To try Pawfect with three fictional pets (Milo, Luna and Mochi) that have care records, overdue and upcoming reminders and weight history, stop Pawfect and run this once from the `backend` directory:
+
+```sh
+mvn compile exec:java@demo-data
+```
+
+It only works on a database with no pets, care records or weight measurements; otherwise it changes nothing and says so. It is never run automatically. Dates are relative to the day you run it.
+
 ## Features
 
 - Pet profiles with species, breed, birthday, sex, weight, vet, emoji, and notes
