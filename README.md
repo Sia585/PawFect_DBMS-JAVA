@@ -24,6 +24,8 @@ It only works on a database with no pets, care records or weight measurements; o
 
 ## Features
 
+**Original**
+
 - Pet profiles with species, breed, birthday, sex, weight, vet, emoji, and notes
 - Records for vaccination, medication, vet visits, feeding, grooming, weight, and other care
 - Due dates grouped into overdue, soon, and upcoming reminders
@@ -31,4 +33,19 @@ It only works on a database with no pets, care records or weight measurements; o
 - Export a pet's profile and care history to CSV
 - SQLite foreign keys and transactional saves for pet and care data
 
-The local backend has no login or network exposure; it binds to `127.0.0.1`. Keep a copy of `backend/pawfect.db` if you need a backup.
+**PawFect 2.0**
+
+- Structured weight tracking: dated measurements entered in kg, lb or g, stored as integer grams, with an SVG trend chart and summary cards (the CSV export includes the weight history)
+- Reviewed import of old Weight care records: clear notes are pre-selected, ambiguous ones are never guessed, and care records are never changed
+- Pet photographs (JPEG or PNG): checked, resized and stored as files in `backend/photos`, with the emoji as a fallback
+- Light, dark and system themes
+- Custom species and breed suggestions when adding a pet
+- Versioned schema migrations (`PRAGMA user_version`, currently 3). Before upgrading a database that already holds data, a verified backup is written to `backend/backups`, and a database from a newer version is refused
+- Revision-based conflict detection: a stale save from another tab is refused (HTTP 409) and nothing is overwritten
+- A request guard that checks the Host and Origin headers and limits request sizes
+
+## Not included
+
+Login and encryption at rest, recurring reminders, calendar scheduling, cloud sync, and automatic backup and restore are not implemented. A design note for backup and restore is in [`docs/BACKUP_RESTORE_DESIGN.md`](docs/BACKUP_RESTORE_DESIGN.md).
+
+The local backend has no login or network exposure; it binds to `127.0.0.1`. Keep a copy of `backend/pawfect.db` and the `backend/photos` folder if you need a backup.
